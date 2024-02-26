@@ -1,0 +1,102 @@
+---
+title: "FA2 Data wrangling"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-02-26"
+---
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tidyr)
+library(ggrepel)
+```
+
+```{r}
+mlb_data <- ml_pay
+```
+
+```{r}
+payroll_long <- mlb_data %>%
+  pivot_longer(cols = starts_with("p"), names_to = "year", values_to = "payroll") %>%
+  mutate(year = as.numeric(gsub("p", "", year))) 
+
+wins_long <-  mlb_data %>%
+  pivot_longer(cols = starts_with("X"), names_to = "year", values_to = "wins") %>%
+  mutate(year = as.numeric(gsub("X", "", year)))  
+
+win_percentage_long <-  mlb_data %>%
+  pivot_longer(cols = starts_with("X"), names_to = "year", values_to = "win_percentage") %>%
+  mutate(year = as.numeric(gsub("X|\\.pct", "", year)))  
+
+tidy_data <- payroll_long %>%
+  left_join(wins_long, by = c("Team.name.2014", "year")) %>%
+  left_join(win_percentage_long, by = c("Team.name.2014", "year"))
+
+
+head(tidy_data)
+
+```
+
+```{r}
+missing_values <- sapply( mlb_data, function(x) sum(is.na(x)))
+print("Missing values:")
+print(missing_values)
+
+
+duplicate_rows <- mlb_data[duplicated( mlb_data), ]
+print("Duplicate rows:")
+print(duplicate_rows)
+
+print("Data types:")
+print(sapply( mlb_data, class))
+```
+
+```{r}
+ml_pay_long <-  mlb_data %>%
+  pivot_longer(cols = starts_with("p"), names_to = "year", values_to = "payroll") %>%
+  mutate(year = as.numeric(gsub("p", "", year)))  
+
+
+aggregated_computed <- ml_pay_long %>%
+  group_by(Team.name.2014, year) %>%
+  summarise(payroll = mean(payroll))  
+aggregated_computed
+
+```
+
+```{r}
+win_percentage_data <-  mlb_data %>%
+  select(Team.name.2014,avgwin, starts_with("X")) %>%
+  pivot_longer(cols = starts_with("X"), names_to = "Year", values_to = "Win_Percentage") %>%
+  mutate(Year = as.numeric(gsub("X", "", Year))) %>%
+  arrange(Year)
+
+win_percentage_data
+```
+
+```{r}
+model <- lm(avgwin ~ payroll, data =  mlb_data)
+
+summary(model)
+
+plot(mlb_data$payroll,  mlb_data$avgwin,
+     xlab = "Total Team Payroll (in billions of dollars)",
+     ylab = "Aggregated Win Percentage",
+     main = "relationship of winning percentage and Payroll")
+abline(model, col = "red")
+
+###with the redline representing the slope. we can say that the even if the team has a low payroll their winning percentage is still high and vice versa.
+```
+
+```{r}
+ mlb_data$efficiency <-  mlb_data$avgwin / mlb_data$payroll
+
+ mlb_data <-  mlb_data[order(mlb_data$efficiency, decreasing = TRUE), ]
+
+head( mlb_data[, c("Team.name.2014", "efficiency")], 30)
+
+###you can see that the most efficient team is the miami marlins with an efficient score of 0.7208173 followed by the tampa bay rays with a score of 0.6591511. they are only a few team that can be said as a high efficieny team. let's consider the top 10 as those who are in high efficieny while 11-30 are low efficient. but we there is still a variable here where we can say that some low efficient teams has high payrolls with low winning percentage and some high efficient teams has high winning percentage with low payrolls (vice versa)
+```
+
