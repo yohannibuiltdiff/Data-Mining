@@ -1,0 +1,360 @@
+---
+title: "FA3 Data Wrangling"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-03-11"
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(caret)
+library(splines)
+library(readxl)
+library(ggplot2)
+library(knitr) 
+library(kableExtra) 
+library(cowplot) 
+library(FNN) 
+```
+
+```{r}
+bmd_raw <- read_excel("C:/Users/yohan gacasa/Downloads/bmd-data.xlsx")
+#idnum: Identifier for each individual.
+#age: Age of the individual.
+#sex: Gender of the individual.
+#fracture: Whether the individual has experienced a fracture or not.
+#weight_kg: Weight of the individual in kilograms.
+#height_cm: Height of the individual in centimeters.
+#medication: Medication status of the individual.
+#waiting_time: Waiting time (possibly related to medical appointments)
+#spnbmd: Some measure related to bone mineral density.
+bmd <- bmd_raw %>%
+  select(idnum, age, sex, fracture, weight_kg, height_cm, medication, waiting_time, spnbmd)
+
+head(bmd)
+```
+
+```{r}
+children <- bmd_raw %>%
+  filter(age < 18)
+
+
+total_children <- nrow(children)
+
+
+boys <- children %>% 
+  filter(sex == "M") %>% 
+  nrow()
+
+girls <- children %>% 
+  filter(sex == "F") %>% 
+  nrow()
+
+
+cat("Total number of children:", total_children, "\n")
+cat("Number of boys:", boys, "\n")
+cat("Number of girls:", girls, "\n")
+```
+
+```{r}
+boys <- children %>% 
+  filter(sex == "M") %>% 
+  summarize(median_age = median(age, na.rm = TRUE))
+
+girls <- children %>% 
+  filter(sex == "F") %>% 
+  summarize(median_age = median(age, na.rm = TRUE))
+
+
+cat("Median age of boys:",boys$median_age, "\n")
+cat("Median age of girls:",girls$median_age, "\n")
+
+```
+
+```{r}
+boys_data <- bmd_raw %>% filter(sex == "M")
+girls_data <- bmd_raw %>% filter(sex == "F")
+
+
+plot_distribution <- function(data, variable, title) {
+  ggplot(data, aes(x = !!sym(variable), fill = sex)) +
+    geom_density(alpha = 0.5) +
+    labs(title = title, x = variable, y = "Density") +
+    theme_minimal()
+}
+
+plot_spnbmd <- plot_distribution(bmd_raw, "spnbmd", "Distribution of SPNBMD")
+
+plot_age <- plot_distribution(bmd_raw, "age", "Distribution of Age")
+
+plot_grid(plot_spnbmd, plot_age, ncol = 2)
+```
+
+```{r}
+scatter_plot <- ggplot(bmd_raw, aes(x = age, y = spnbmd)) +
+  geom_point() +
+  facet_wrap(~ sex) +
+  labs(x = "Age", y = "SPNBMD", title = "Scatter Plot of SPNBMD vs. Age Faceted by Gender") +
+  theme_minimal()
+
+print(scatter_plot)
+```
+
+```{r}
+smooth <- ggplot(bmd_raw, aes(x = age, y = spnbmd)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +  
+  facet_wrap(~ sex) +
+  labs(x = "Age", y = "SPNBMD", title = "Scatter Plot of SPNBMD vs. Age with Splines Faceted by Gender") +
+  theme_minimal()
+
+print(smooth)
+
+###both of them are descending but the female tends to decrease 
+###faster than the male plot. As they age SPNBMD decreases.
+```
+
+```{r}
+
+set.seed(5)
+
+bmd_shuffled <- bmd_raw %>% sample_n(size = nrow(bmd_raw))
+
+n_train <- round(0.8 * nrow(bmd_shuffled))  
+n_test <- nrow(bmd_shuffled) - n_train     
+
+bmd_train <- bmd_shuffled %>% slice(1:n_train)
+bmd_test <- bmd_shuffled %>% slice((n_train + 1):nrow(bmd_shuffled))
+
+nrow_bmd_train <- nrow(bmd_train)
+nrow_bmd_test <- nrow(bmd_test)
+
+cat("Number of rows in bmd_train:", nrow_bmd_train, "\n")
+cat("Number of rows in bmd_test:", nrow_bmd_test, "\n")
+
+```
+
+```{r}
+bmd_train_male <- bmd_train %>% filter(sex == "M")
+bmd_train_female <- bmd_train %>% filter(sex == "F")
+
+bmd_test_male <- bmd_test %>% filter(sex == "M")
+bmd_test_female <- bmd_test %>% filter(sex == "F")
+
+nrow_bmd_train_male <- nrow(bmd_train_male)
+nrow_bmd_train_female <- nrow(bmd_train_female)
+nrow_bmd_test_male <- nrow(bmd_test_male)
+nrow_bmd_test_female <- nrow(bmd_test_female)
+
+cat("Number of rows in bmd_train_male:", nrow_bmd_train_male, "\n")
+cat("Number of rows in bmd_train_female:", nrow_bmd_train_female, "\n")
+cat("Number of rows in bmd_test_male:", nrow_bmd_test_male, "\n")
+cat("Number of rows in bmd_test_female:", nrow_bmd_test_female, "\n")
+```
+
+```{r}
+perform_cv <- function(data, df_values) {
+  cv_results <- lapply(df_values, function(df) {
+    formula <- as.formula(paste("spnbmd ~ ns(age, df = ", df, ")", sep = ""))
+    model <- train(formula, data = data, method = "lm", trControl = trainControl(method = "cv", number = 10))
+    data.frame(df = df, RMSE = sqrt(mean(model$resample$RMSE)))
+  })
+  do.call(rbind, cv_results)
+}
+
+cv_results_male <- perform_cv(bmd_train_male, 1:15)
+
+cv_results_female <- perform_cv(bmd_train_female, 1:15)
+
+cv_results_male$sex <- "Male"
+cv_results_female$sex <- "Female"
+cv_results <- rbind(cv_results_male, cv_results_female)
+
+cv_plot <- ggplot(cv_results, aes(x = df, y = RMSE, color = sex)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Cross-validation Plot for SPNBMD by Gender", x = "Degrees of Freedom", y = "Root Mean Squared Error") +
+  theme_minimal() +
+  facet_wrap(~ sex, scales = "free")
+
+print(cv_plot)
+```
+
+```{r}
+find_optimal_df <- function(cv_results) {
+  
+  min_rmse_row <- cv_results[which.min(cv_results$RMSE), ]
+  
+  optimal_df <- min_rmse_row$df
+  
+  one_se_rule_value <- min_rmse_row$RMSE + sd(cv_results$RMSE)
+  
+  one_se_rule_df <- cv_results$df[which(cv_results$RMSE <= one_se_rule_value)[1]]
+  
+  return(list(optimal_df = optimal_df, one_se_rule_df = one_se_rule_df))
+}
+
+result_male <- find_optimal_df(cv_results_male)
+
+result_female <- find_optimal_df(cv_results_female)
+
+cat("Males\n")
+cat("Optimal degree of freedom:", result_male$optimal_df, "\n")
+cat("One standard error rule value:", result_male$one_se_rule_df, "\n\n")
+
+cat("Females\n")
+cat("Optimal degree of freedom:", result_female$optimal_df, "\n")
+cat("One standard error rule value:", result_female$one_se_rule_df, "\n")
+
+```
+
+```{r}
+df_min_male <- min(result_male$optimal_df, na.rm = TRUE)
+df_min_female <- min(result_female$optimal_df, na.rm = TRUE)
+df_min <- max(df_min_male, df_min_female)
+
+df_1se_male <- result_male$one_se_rule_df
+df_1se_female <- result_female$one_se_rule_df
+df_1se <- max(df_1se_male, df_1se_female)
+
+spline_fit_male <- lm(spnbmd ~ ns(age, df = df_min), data = bmd_train_male)
+spline_fit_female <- lm(spnbmd ~ ns(age, df = df_min), data = bmd_train_female)
+
+scatter_plot <- ggplot() +
+  geom_point(data = bmd_train_male, aes(x = age, y = spnbmd), color = "blue") +
+  geom_point(data = bmd_train_female, aes(x = age, y = spnbmd), color = "red") +
+  geom_smooth(data = bmd_train_male, aes(x = age, y = spnbmd), method = "lm", formula = y ~ ns(x, df = df_min), color = "blue", se = FALSE) +
+  geom_smooth(data = bmd_train_female, aes(x = age, y = spnbmd), method = "lm", formula = y ~ ns(x, df = df_min), color = "red", se = FALSE) +
+  labs(x = "Age", y = "SPNBMD", title = "Scatter Plot of SPNBMD versus Age, Faceted by Gender") +
+  theme_minimal() +
+  facet_wrap(~ sex)
+
+print(scatter_plot)
+
+```
+
+```{r}
+
+final_spline_model_male <- lm(spnbmd ~ ns(age, df = df_min), data = bmd_train_male)
+
+final_spline_model_female <- lm(spnbmd ~ ns(age, df = df_min), data = bmd_train_female)
+```
+
+```{r}
+calculate_rmse <- function(model, data) {
+  
+  predictions <- predict(model, newdata = data)
+  
+  rmse <- sqrt(mean((data$spnbmd - predictions)^2))
+  
+  return(rmse)
+}
+
+train_rmse_boys <- calculate_rmse(final_spline_model_male, bmd_train_male)
+test_rmse_boys <- calculate_rmse(final_spline_model_male, bmd_test_male)
+
+train_rmse_girls <- calculate_rmse(final_spline_model_female, bmd_train_female)
+test_rmse_girls <- calculate_rmse(final_spline_model_female, bmd_test_female)
+
+rmse_table <- data.frame(
+  Gender = c("Boys", "Girls"),
+  Training_RMSE = c(train_rmse_boys, train_rmse_girls),
+  Test_RMSE = c(test_rmse_boys, test_rmse_girls)
+)
+
+print(rmse_table)
+###The test RMSE is greater than the training RMSE in both situations. ###This is to be expected since the training RMSE is usually lower than the test RMSE 
+###because the model is usually tailored to suit the training data well. Here, we observe that the test RMSE is larger than the training RMSE 
+###for both boys and girls, suggesting a degree of overfitting. 
+###Because boys' training and test RMSE differences are greater than girls', 
+###the degree of overfitting is comparatively greater in the former group.
+```
+
+```{r}
+  scatter_plot <- ggplot() +
+    geom_point(data = bmd_train_male, aes(x = age, y = spnbmd, color = "Boys"), alpha = 0.5) +
+    geom_point(data = bmd_train_female, aes(x = age, y = spnbmd, color = "Girls"), alpha = 0.5) +
+    geom_smooth(data = bmd_train_male, aes(x = age, y = spnbmd, color = "Boys"), method = "lm", formula = y ~ ns(x, df = df_min), se = FALSE) +
+    geom_smooth(data = bmd_train_female, aes(x = age, y = spnbmd, color = "Girls"), method = "lm", formula = y ~ ns(x, df = df_min), se = FALSE) +
+    labs(x = "Age", y = "SPNBMD", title = "Scatter Plot of SPNBMD versus Age with Spline Fits") +
+    scale_color_manual(values = c("Boys" = "blue", "Girls" = "red")) +
+    theme_minimal()
+  
+  print(scatter_plot)
+###Growth Spurt
+###Boys:59 Years old
+###Girls:67 Years old
+###growth largely level off
+###Boys:85 Years old
+###Girls: 73 Years old
+### we can't say that this is right ballpark because
+### this is where genetics can get in and factors
+### such as overall health in your body.
+```
+```{r}
+actual_yields <- c(120, 100, 80, 60)
+
+underlying_trend <- c(130, 110, 90, 70)
+
+predicted_yields <- underlying_trend
+
+training_error <- mean((actual_yields - predicted_yields)^2)
+
+mean_squared_bias <- mean((predicted_yields - actual_yields)^2)
+
+mean_variance <- mean((predicted_yields - mean(predicted_yields))^2)
+
+expected_test_error <- mean_squared_bias + mean_variance
+
+cat("1. Training Error:", training_error, "\n")
+cat("2. Mean Squared Bias (MSB):", mean_squared_bias, "\n")
+cat("3. Mean Variance (MV):", mean_variance, "\n")
+cat("4. Expected Test Error (ETE):", expected_test_error, "\n")
+#this is not the best possible prediction rule because
+#we solely based this on data but we didn't take into
+#consideration the weather and environmental conditions.
+```
+```{r}
+##What happens to the model complexity as K increases? Why?
+#the model averages the results of several adjacent data points. 
+#This averaging process results in a smoother forecast surface that #reduces forecast variability. For larger K, the model becomes less #sensitive to local variations in the data or noise. 
+#It is based more on general trends in the data 
+#than individual data points. This reduced sensitivity 
+#makes the model less flexible and reduces 
+#its ability to capture complex patterns in the data.
+```
+```{r}
+##The degrees of freedom for KNN is sometimes considered n/K, 
+##where n is the training set size. 
+##Why might this be the case? 
+#In KNN regression, the prediction for a data point is based on the average of the results of its K nearest neighbors. 
+#When K is small compared to the total number of data points (n), the #influence of each data point on the prediction is limited 
+#to a small surrounding area. In the event that the data is 
+#compressed or clustered into groups of size K, 
+#each group effectively contributes one "degree of freedom" to the model. This is because the predictions in each cluster are 
+#derived from a set of K equal neighbors, 
+#and the behavior of the model in each cluster is 
+#somewhat independent of the behavior of other clusters.
+```
+```{r}
+##Conceptually, why might increasing K tend to improve the 
+##prediction rule? What does this have to do with 
+##the bias-variance tradeoff?
+#Increasing K in K-Nearest Neighbors (KNN) tends to improve 
+#the prediction rule, as it helps reduce model variance 
+#by increasing the bias, thus improving the trade-off 
+#between bias and variance.
+```
+```{r}
+##Conceptually, why might increasing K tend to worsen the 
+##prediction rule? What does this have to do with 
+##the bias-variance tradeoff?
+#Increased bias and Reduced Variance
+#For increased bias This can lead to an oversimplification 
+#of the models underlying the data, 
+#which increases bias.
+#For reduced variance it may lead to loss of
+#the flexibility of the model.
+```
